@@ -371,7 +371,7 @@ async function handleInstagram(url, mediaType, sizeArg, postName) {
     postName = postName || folderName
     folderName = path.join( 'output', folderName)
 
-    const browser = await puppeteer.launch()
+    const browser = await puppeteer.launch();
     const page = await browser.newPage()
     const partialMp4s = {}
     const resources = []
@@ -406,7 +406,7 @@ async function handleInstagram(url, mediaType, sizeArg, postName) {
     })
 
     await page.goto(url, { waitUntil: 'networkidle2' })
-    await new Promise(r => setTimeout(r, 1000))
+    await new Promise(r => setTimeout(r, 2000))
     await browser.close()
 
     // Save resources (images, audio) that meet threshold

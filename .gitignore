@@ -1,0 +1,7 @@
+.venv/
+**/node_modules/
+output/
+downloads/
+.env
+pnpm-lock.yaml
+insta_cookie.json
