@@ -7,3 +7,4 @@ pnpm-lock.yaml
 .insta_cookie.json
 dist/
 coverage/
+.claude/settings.local.json
