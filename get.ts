@@ -8,6 +8,7 @@ import sizeOf from 'image-size';
 import * as xml2js from 'xml2js';
 import nodeFetch from 'node-fetch';
 import * as dotenv from 'dotenv';
+import { createInstagramDownloader } from './instagram-downloader';
 
 // Load environment variables
 try {
@@ -139,7 +140,7 @@ function logDebug(...msg: any[]): void {
     if (isVerbose) console.log(...msg);
 }
 
-function parseSizeThreshold(input?: string): number {
+export function parseSizeThreshold(input?: string): number {
     if (!input) return 10240;
     const match = input.match(/^(\d+)(k?)$/i);
     if (!match) return 10240;
@@ -147,13 +148,13 @@ function parseSizeThreshold(input?: string): number {
     return match[2].toLowerCase() === 'k' ? n * 1024 : n;
 }
 
-function parseTimeout(input?: string): number {
+export function parseTimeout(input?: string): number {
     if (!input) return 10000; // 기본값 10초로 증가
     const timeout = parseInt(input, 10);
     return isNaN(timeout) ? 10000 : timeout * 1000; // 초를 밀리초로 변환
 }
 
-function parseOutputFolder(urlString: string): string {
+export function parseOutputFolder(urlString: string): string {
     try {
         const p = new URL(urlString).pathname.replace(/\/+$/, '');
         let folder = p.substring(p.lastIndexOf('/') + 1) || 'output';
@@ -176,7 +177,7 @@ function getMediaDuration(ffprobePath: string, filePath: string): number {
 }
 
 /* --------------------- Filtering --------------------- */
-function filterAndSaveMedia(folderName: string, resource: Resource, threshold: number): boolean {
+export function filterAndSaveMedia(folderName: string, resource: Resource, threshold: number): boolean {
     if (resource.buf.length < threshold) {
         logDebug('Resource below threshold, skipping:', resource.url);
         return false;
@@ -764,22 +765,58 @@ async function extractMediaRecursive(item: InstagramMediaItem, folderName: strin
 }
 
 /* --------------------- Instagram --------------------- */
-async function handleInstagram(url: string, mediaType: string, sizeArg: string, postName?: string | null): Promise<void> {
-    // const ffprobePath = 'ffprobe';
-    // const ffmpegPath = 'ffmpeg';
+export async function handleInstagram(url: string, mediaType: string, sizeArg: string, postName?: string | null): Promise<void> {
+    logDebug(`[handleInstagram] Using improved Instagram downloader`);
+
+    try {
+        // Create Instagram downloader with configuration
+        const downloader = await createInstagramDownloader({
+            outputDir: 'output',
+            quality: 'high',
+            sessionFile: '.instagram_session.json'
+        });
+
+        // Download media from URL
+        const result = await downloader.downloadFromUrl(url);
+        
+        if (result.success) {
+            console.log(`✅ Successfully downloaded ${result.files.length} files`);
+            result.files.forEach(file => {
+                console.log(`  - ${path.basename(file)}`);
+            });
+        } else {
+            console.log(`❌ Download failed: ${result.error}`);
+            
+            // Fallback to legacy Puppeteer method if API fails
+            console.log('🔄 Falling back to legacy browser method...');
+            await handleInstagramLegacy(url, mediaType, sizeArg, postName);
+        }
+
+        // Close downloader and save session
+        await downloader.close();
+
+    } catch (error: any) {
+        console.error('Error in handleInstagram:', error.message);
+        
+        // Fallback to legacy method
+        console.log('🔄 Falling back to legacy browser method...');
+        await handleInstagramLegacy(url, mediaType, sizeArg, postName);
+    }
+}
+
+/* --------------------- Instagram Legacy (Puppeteer) --------------------- */
+async function handleInstagramLegacy(url: string, mediaType: string, sizeArg: string, postName?: string | null): Promise<void> {
     const threshold = parseSizeThreshold(sizeArg);
     let folderName = parseOutputFolder(url);
     postName = postName || folderName;
     folderName = path.join('output', folderName);
 
-    logDebug(`[handleInstagram] Starting with timeout: 2000ms`);
+    logDebug(`[handleInstagramLegacy] Starting with timeout: 2000ms`);
 
     try {
-        // Simple browser settings like get2.js
         const browser = await puppeteer.launch();
         const page = await browser.newPage();
         
-        // const partialMp4s: PartialMp4Map = {};
         const resources: Resource[] = [];
         const items: InstagramMediaItem[] = [];
 
@@ -798,7 +835,6 @@ async function handleInstagram(url: string, mediaType: string, sizeArg: string, 
 
                     const user = item.owner;
                     if (user && user.username) {
-                        // Must always print user name
                         console.log('Found username =>', user.username);
                         folderName = path.join('output', user.username);
                         fs.mkdirSync(folderName, { recursive: true });
@@ -814,17 +850,15 @@ async function handleInstagram(url: string, mediaType: string, sizeArg: string, 
         await new Promise(r => setTimeout(r, 2000));
         await browser.close();
 
-        // Save resources (images, audio) that meet threshold
         resources.forEach(r => filterAndSaveMedia(folderName, r, threshold));
 
-        // For each JSON item, extract recursively
         for (let i = 0; i < items.length; i++) {
             const item = items[i];
             const localName = postName + (i > 0 ? `_${i}` : '');
             await extractMediaRecursive(item, folderName, localName);
         }
     } catch (error) {
-        console.error('Error in handleInstagram:', error);
+        console.error('Error in handleInstagramLegacy:', error);
         throw error;
     }
 }

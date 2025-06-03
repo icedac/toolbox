@@ -1,14 +1,8 @@
+import { parseSizeThreshold, parseTimeout, parseOutputFolder } from './get';
+
 describe('Media Downloader Unit Tests', () => {
     describe('Helper Functions', () => {
         describe('parseSizeThreshold', () => {
-            const parseSizeThreshold = (input?: string): number => {
-                if (!input) return 10240;
-                const match = input.match(/^(\d+)(k?)$/i);
-                if (!match) return 10240;
-                const n = parseInt(match[1], 10);
-                return match[2].toLowerCase() === 'k' ? n * 1024 : n;
-            };
-
             it('should return default 10240 when no input', () => {
                 expect(parseSizeThreshold()).toBe(10240);
                 expect(parseSizeThreshold('')).toBe(10240);
@@ -34,12 +28,6 @@ describe('Media Downloader Unit Tests', () => {
         });
 
         describe('parseTimeout', () => {
-            const parseTimeout = (input?: string): number => {
-                if (!input) return 10000;
-                const timeout = parseInt(input, 10);
-                return isNaN(timeout) ? 10000 : timeout * 1000;
-            };
-
             it('should return default 10000ms when no input', () => {
                 expect(parseTimeout()).toBe(10000);
                 expect(parseTimeout('')).toBe(10000);
@@ -59,17 +47,6 @@ describe('Media Downloader Unit Tests', () => {
         });
 
         describe('parseOutputFolder', () => {
-            const parseOutputFolder = (urlString: string): string => {
-                try {
-                    const p = new URL(urlString).pathname.replace(/\/+$/, '');
-                    let folder = p.substring(p.lastIndexOf('/') + 1) || 'output';
-                    folder = folder.replace(/[^\w-]/g, '') || 'output';
-                    return folder;
-                } catch {
-                    return 'output';
-                }
-            };
-
             it('should extract folder name from URL path', () => {
                 expect(parseOutputFolder('https://example.com/folder/post123')).toBe('post123');
                 expect(parseOutputFolder('https://example.com/my-folder')).toBe('my-folder');

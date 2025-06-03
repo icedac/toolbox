@@ -4,7 +4,9 @@ module.exports = {
   roots: ['<rootDir>'],
   testMatch: ['**/__tests__/**/*.ts', '**/?(*.)+(spec|test).ts'],
   transform: {
-    '^.+\\.ts$': 'ts-jest',
+    '^.+\\.ts$': ['ts-jest', {
+      tsconfig: 'tsconfig.test.json'
+    }],
   },
   collectCoverageFrom: [
     '**/*.ts',
@@ -21,6 +23,6 @@ module.exports = {
     'node_modules/(?!(node-fetch)/)'
   ],
   moduleNameMapper: {
-    'node-fetch': '<rootDir>/node_modules/node-fetch/lib/index.js'
+    '^node-fetch$': '<rootDir>/__mocks__/node-fetch.js'
   }
 };
