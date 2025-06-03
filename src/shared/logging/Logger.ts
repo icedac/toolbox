@@ -7,6 +7,7 @@ export interface ILogger {
   warn(message: string, meta?: any): void;
   error(message: string, error?: Error | any, meta?: any): void;
   fatal(message: string, error?: Error | any, meta?: any): void;
+  setLevel?(level: LogLevel | string): void;
 }
 
 /**
@@ -89,6 +90,17 @@ export class ConsoleLogger implements ILogger {
 
   fatal(message: string, error?: Error | any, meta?: any): void {
     this.log(LogLevel.FATAL, message, meta, error);
+  }
+
+  setLevel(level: LogLevel | string): void {
+    if (typeof level === 'string') {
+      const levelValue = LogLevel[level.toUpperCase() as keyof typeof LogLevel];
+      if (levelValue !== undefined) {
+        this.config.level = levelValue;
+      }
+    } else {
+      this.config.level = level;
+    }
   }
 
   /**
@@ -278,3 +290,8 @@ export function createChildLogger(parent: ILogger, name: string): ILogger {
  * Default logger instance
  */
 export const logger = LoggerFactory.getLogger('App');
+
+/**
+ * Type alias for backward compatibility
+ */
+export type Logger = ILogger;
