@@ -4,18 +4,18 @@ Based on PRD.md requirements and current codebase analysis.
 
 ## High Priority
 
-### 1. Improve Instagram downloader implementation
+### 1. Improve Instagram downloader implementation ✅
 - Replace current Puppeteer-based approach with instagram-private-api library
 - Better reliability and less brittle than browser automation
 - Maintain existing cookie authentication support
-- Status: Pending
+- Status: **Completed**
 
-### 2. Add comprehensive test coverage
+### 2. Add comprehensive test coverage ✅
 - Create tests for Instagram downloader functionality
 - Test YouTube audio extraction
 - Mock external dependencies (Puppeteer, ffmpeg)
 - Add integration tests for end-to-end workflows
-- Status: Pending
+- Status: **Completed**
 
 ## Medium Priority
 

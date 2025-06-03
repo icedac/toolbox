@@ -140,7 +140,7 @@ function logDebug(...msg: any[]): void {
     if (isVerbose) console.log(...msg);
 }
 
-function parseSizeThreshold(input?: string): number {
+export function parseSizeThreshold(input?: string): number {
     if (!input) return 10240;
     const match = input.match(/^(\d+)(k?)$/i);
     if (!match) return 10240;
@@ -148,13 +148,13 @@ function parseSizeThreshold(input?: string): number {
     return match[2].toLowerCase() === 'k' ? n * 1024 : n;
 }
 
-function parseTimeout(input?: string): number {
+export function parseTimeout(input?: string): number {
     if (!input) return 10000; // 기본값 10초로 증가
     const timeout = parseInt(input, 10);
     return isNaN(timeout) ? 10000 : timeout * 1000; // 초를 밀리초로 변환
 }
 
-function parseOutputFolder(urlString: string): string {
+export function parseOutputFolder(urlString: string): string {
     try {
         const p = new URL(urlString).pathname.replace(/\/+$/, '');
         let folder = p.substring(p.lastIndexOf('/') + 1) || 'output';
@@ -177,7 +177,7 @@ function getMediaDuration(ffprobePath: string, filePath: string): number {
 }
 
 /* --------------------- Filtering --------------------- */
-function filterAndSaveMedia(folderName: string, resource: Resource, threshold: number): boolean {
+export function filterAndSaveMedia(folderName: string, resource: Resource, threshold: number): boolean {
     if (resource.buf.length < threshold) {
         logDebug('Resource below threshold, skipping:', resource.url);
         return false;
@@ -765,7 +765,7 @@ async function extractMediaRecursive(item: InstagramMediaItem, folderName: strin
 }
 
 /* --------------------- Instagram --------------------- */
-async function handleInstagram(url: string, mediaType: string, sizeArg: string, postName?: string | null): Promise<void> {
+export async function handleInstagram(url: string, mediaType: string, sizeArg: string, postName?: string | null): Promise<void> {
     logDebug(`[handleInstagram] Using improved Instagram downloader`);
 
     try {
