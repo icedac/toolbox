@@ -2,6 +2,23 @@
 
 This directory contains the refactored codebase following Clean Architecture principles and SOLID design patterns.
 
+## 🚀 Quick Start
+
+```bash
+# Install dependencies
+npm install
+
+# Build the project
+npm run build
+
+# Run the CLI
+npm run dev https://www.instagram.com/p/SHORTCODE/
+
+# Run with authentication
+export INSTAGRAM_COOKIES_FILE=/path/to/cookies.txt
+npm run dev https://www.instagram.com/p/SHORTCODE/
+```
+
 ## 🏗️ Architecture Overview
 
 ```
@@ -11,6 +28,51 @@ src/
 ├── infrastructure/   # Frameworks & Drivers
 ├── presentation/     # Interface Adapters
 └── shared/          # Cross-cutting Concerns
+```
+
+## ✅ Implementation Status
+
+### Phase 1: Domain Layer ✅
+- Core entities (Media, User, DownloadResult)
+- Domain interfaces (IMediaDownloader, IFileStorage, IAuthenticator)
+- Value objects (MediaUrl, Filename)
+- Error handling framework
+
+### Phase 2: Infrastructure Layer ✅
+- InstagramDownloader with multiple extraction strategies
+- LocalFileStorage implementation
+- CookieAuthenticator for authentication
+- HttpClient with retry logic
+
+### Phase 3: Presentation Layer ✅
+- CLI application framework
+- Download and Auth commands
+- Configuration management
+- Dependency injection setup
+
+### Phase 4: Build & Documentation ✅
+- TypeScript configuration
+- Package.json with scripts
+- Integration examples
+- Comprehensive documentation
+
+## 📚 Documentation
+
+- [Architecture Guide](./ARCHITECTURE.md) - Detailed architecture documentation
+- [Domain README](./domain/README.md) - Domain layer specifics
+- [Examples](./examples/) - Usage examples
+
+## 🧪 Testing
+
+```bash
+# Run tests
+npm test
+
+# Watch mode
+npm run test:watch
+
+# Coverage
+npm run test:coverage
 ```
 
 ## 📁 Layer Descriptions
