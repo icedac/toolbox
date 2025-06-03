@@ -8,6 +8,7 @@ import sizeOf from 'image-size';
 import * as xml2js from 'xml2js';
 import nodeFetch from 'node-fetch';
 import * as dotenv from 'dotenv';
+import { createInstagramDownloader } from './instagram-downloader';
 
 // Load environment variables
 try {
@@ -765,21 +766,57 @@ async function extractMediaRecursive(item: InstagramMediaItem, folderName: strin
 
 /* --------------------- Instagram --------------------- */
 async function handleInstagram(url: string, mediaType: string, sizeArg: string, postName?: string | null): Promise<void> {
-    // const ffprobePath = 'ffprobe';
-    // const ffmpegPath = 'ffmpeg';
+    logDebug(`[handleInstagram] Using improved Instagram downloader`);
+
+    try {
+        // Create Instagram downloader with configuration
+        const downloader = await createInstagramDownloader({
+            outputDir: 'output',
+            quality: 'high',
+            sessionFile: '.instagram_session.json'
+        });
+
+        // Download media from URL
+        const result = await downloader.downloadFromUrl(url);
+        
+        if (result.success) {
+            console.log(`✅ Successfully downloaded ${result.files.length} files`);
+            result.files.forEach(file => {
+                console.log(`  - ${path.basename(file)}`);
+            });
+        } else {
+            console.log(`❌ Download failed: ${result.error}`);
+            
+            // Fallback to legacy Puppeteer method if API fails
+            console.log('🔄 Falling back to legacy browser method...');
+            await handleInstagramLegacy(url, mediaType, sizeArg, postName);
+        }
+
+        // Close downloader and save session
+        await downloader.close();
+
+    } catch (error: any) {
+        console.error('Error in handleInstagram:', error.message);
+        
+        // Fallback to legacy method
+        console.log('🔄 Falling back to legacy browser method...');
+        await handleInstagramLegacy(url, mediaType, sizeArg, postName);
+    }
+}
+
+/* --------------------- Instagram Legacy (Puppeteer) --------------------- */
+async function handleInstagramLegacy(url: string, mediaType: string, sizeArg: string, postName?: string | null): Promise<void> {
     const threshold = parseSizeThreshold(sizeArg);
     let folderName = parseOutputFolder(url);
     postName = postName || folderName;
     folderName = path.join('output', folderName);
 
-    logDebug(`[handleInstagram] Starting with timeout: 2000ms`);
+    logDebug(`[handleInstagramLegacy] Starting with timeout: 2000ms`);
 
     try {
-        // Simple browser settings like get2.js
         const browser = await puppeteer.launch();
         const page = await browser.newPage();
         
-        // const partialMp4s: PartialMp4Map = {};
         const resources: Resource[] = [];
         const items: InstagramMediaItem[] = [];
 
@@ -798,7 +835,6 @@ async function handleInstagram(url: string, mediaType: string, sizeArg: string, 
 
                     const user = item.owner;
                     if (user && user.username) {
-                        // Must always print user name
                         console.log('Found username =>', user.username);
                         folderName = path.join('output', user.username);
                         fs.mkdirSync(folderName, { recursive: true });
@@ -814,17 +850,15 @@ async function handleInstagram(url: string, mediaType: string, sizeArg: string, 
         await new Promise(r => setTimeout(r, 2000));
         await browser.close();
 
-        // Save resources (images, audio) that meet threshold
         resources.forEach(r => filterAndSaveMedia(folderName, r, threshold));
 
-        // For each JSON item, extract recursively
         for (let i = 0; i < items.length; i++) {
             const item = items[i];
             const localName = postName + (i > 0 ? `_${i}` : '');
             await extractMediaRecursive(item, folderName, localName);
         }
     } catch (error) {
-        console.error('Error in handleInstagram:', error);
+        console.error('Error in handleInstagramLegacy:', error);
         throw error;
     }
 }
