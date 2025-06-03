@@ -170,5 +170,240 @@ describe('get.ts - Main Media Downloader', () => {
             expect(mockDownloader.downloadFromUrl).toHaveBeenCalledWith('not-a-url');
             expect(mockDownloader.close).toHaveBeenCalled();
         });
+
+        it('should handle Instagram 404 errors and fallback to legacy method', async () => {
+            // Mock the instagram-downloader to fail with 404
+            const mockDownloader = {
+                downloadFromUrl: jest.fn<any>().mockResolvedValue({
+                    success: false,
+                    error: 'Could not extract media info'
+                }),
+                close: jest.fn<any>().mockResolvedValue(undefined)
+            };
+            
+            const { createInstagramDownloader } = require('./instagram-downloader');
+            (createInstagramDownloader as jest.Mock<any>).mockResolvedValue(mockDownloader);
+            
+            // Mock puppeteer for legacy fallback
+            const mockPage = {
+                setRequestInterception: jest.fn<any>(),
+                on: jest.fn<any>(),
+                goto: jest.fn<any>().mockResolvedValue(undefined),
+                close: jest.fn<any>().mockResolvedValue(undefined)
+            };
+            
+            const mockBrowser = {
+                newPage: jest.fn<any>().mockResolvedValue(mockPage),
+                close: jest.fn<any>().mockResolvedValue(undefined)
+            };
+            
+            const puppeteer = require('puppeteer');
+            puppeteer.launch = jest.fn<any>().mockResolvedValue(mockBrowser);
+            
+            const { handleInstagram } = require('./get');
+            
+            // Test the scenario where primary method fails and legacy is called
+            await handleInstagram('https://www.instagram.com/p/DKM6hijhURN/', 'any', '10k');
+            
+            // Verify both methods were attempted
+            expect(mockDownloader.downloadFromUrl).toHaveBeenCalledWith('https://www.instagram.com/p/DKM6hijhURN/');
+            expect(puppeteer.launch).toHaveBeenCalled();
+            expect(mockPage.goto).toHaveBeenCalledWith('https://www.instagram.com/p/DKM6hijhURN/', { waitUntil: 'networkidle2' });
+        });
+
+        it('should handle Instagram posts with missing owner information', () => {
+            const { findJsonItemWithOwner } = require('./get');
+            
+            // Test with valid Instagram API response but no owner info
+            const graphqlResponseWithoutOwner = JSON.stringify({
+                data: {
+                    shortcode_media: {
+                        id: "1234567890",
+                        display_url: "https://example.com/image.jpg",
+                        is_video: false,
+                        display_resources: [
+                            { src: "https://example.com/image_small.jpg", config_width: 150, config_height: 150 },
+                            { src: "https://example.com/image_large.jpg", config_width: 1080, config_height: 1080 }
+                        ]
+                    }
+                }
+            });
+            
+            const result = findJsonItemWithOwner(graphqlResponseWithoutOwner);
+            expect(result).toBeNull();
+        });
+
+        it('should handle Instagram posts with owner information', () => {
+            const { findJsonItemWithOwner } = require('./get');
+            
+            // Test with valid Instagram API response with owner info
+            const graphqlResponseWithOwner = JSON.stringify({
+                data: {
+                    shortcode_media: {
+                        id: "1234567890",
+                        owner: {
+                            username: "_chaechae_1",
+                            id: "987654321"
+                        },
+                        display_url: "https://example.com/image.jpg",
+                        is_video: false,
+                        display_resources: [
+                            { src: "https://example.com/image_small.jpg", config_width: 150, config_height: 150 },
+                            { src: "https://example.com/image_large.jpg", config_width: 1080, config_height: 1080 }
+                        ],
+                        edge_sidecar_to_children: {
+                            edges: [
+                                {
+                                    node: {
+                                        display_url: "https://example.com/carousel1.jpg",
+                                        display_resources: [
+                                            { src: "https://example.com/carousel1_large.jpg", config_width: 1080, config_height: 1080 }
+                                        ]
+                                    }
+                                },
+                                {
+                                    node: {
+                                        display_url: "https://example.com/carousel2.jpg", 
+                                        display_resources: [
+                                            { src: "https://example.com/carousel2_large.jpg", config_width: 1080, config_height: 1080 }
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            });
+            
+            const result = findJsonItemWithOwner(graphqlResponseWithOwner);
+            expect(result).not.toBeNull();
+            expect(result?.owner?.username).toBe('_chaechae_1');
+        });
+
+        it('should handle different Instagram post types (carousel vs single)', async () => {
+            const fs = require('fs');
+            
+            // Mock fs operations
+            fs.mkdirSync = jest.fn();
+            fs.writeFileSync = jest.fn();
+            
+            // Mock node-fetch and sharp for the download functions
+            const nodeFetch = require('node-fetch');
+            const sharp = require('sharp');
+            
+            const mockResponse = {
+                buffer: jest.fn<any>().mockResolvedValue(Buffer.alloc(1000))
+            };
+            nodeFetch.mockResolvedValue(mockResponse);
+            sharp.mockReturnValue({
+                resize: jest.fn().mockReturnThis(),
+                jpeg: jest.fn().mockReturnThis(),
+                toFile: jest.fn<any>().mockResolvedValue(undefined)
+            });
+            
+            const { extractMediaRecursive } = require('./get');
+            
+            // Test single image post
+            const singleImageItem = {
+                owner: { username: "testuser" },
+                is_video: false,
+                display_resources: [
+                    { src: "https://example.com/image.jpg", config_width: 1080, config_height: 1080 }
+                ]
+            };
+            
+            const count1 = await extractMediaRecursive(singleImageItem, '/test/output', 'DKM6hijhURN');
+            expect(count1).toBe(1);
+            expect(nodeFetch).toHaveBeenCalledWith('https://example.com/image.jpg');
+            
+            // Test carousel post (like the working first URL)
+            const carouselItem = {
+                owner: { username: "testuser" },
+                edge_sidecar_to_children: {
+                    edges: [
+                        {
+                            node: {
+                                is_video: false,
+                                display_resources: [
+                                    { src: "https://example.com/carousel1.jpg", config_width: 1080, config_height: 1080 }
+                                ]
+                            }
+                        },
+                        {
+                            node: {
+                                is_video: false,
+                                display_resources: [
+                                    { src: "https://example.com/carousel2.jpg", config_width: 1080, config_height: 1080 }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            };
+            
+            nodeFetch.mockClear();
+            const count2 = await extractMediaRecursive(carouselItem, '/test/output', 'DKHTVuwzjCe');
+            expect(count2).toBe(2);
+            expect(nodeFetch).toHaveBeenCalledTimes(2);
+            expect(nodeFetch).toHaveBeenNthCalledWith(1, 'https://example.com/carousel1.jpg');
+            expect(nodeFetch).toHaveBeenNthCalledWith(2, 'https://example.com/carousel2.jpg');
+        });
+
+        it('should handle video posts with missing DASH manifest (now uses video_url fallback)', async () => {
+            const { extractMediaRecursive } = require('./get');
+            const fs = require('fs');
+            const nodeFetch = require('node-fetch');
+            
+            // Mock fs and fetch operations
+            fs.mkdirSync = jest.fn();
+            fs.writeFileSync = jest.fn();
+            
+            const mockResponse = {
+                buffer: jest.fn<any>().mockResolvedValue(Buffer.alloc(1000))
+            };
+            nodeFetch.mockResolvedValue(mockResponse);
+            
+            // Test video without DASH manifest - now uses video_url fallback
+            const videoWithoutDash = {
+                owner: { username: "testuser" },
+                is_video: true,
+                video_url: "https://example.com/video.mp4",
+                // Missing dash_info or video_dash_manifest
+                display_resources: []
+            };
+            
+            const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+            
+            const count = await extractMediaRecursive(videoWithoutDash, '/test/output', 'VideoTest');
+            
+            // Should return 1 because it uses video_url fallback
+            expect(count).toBe(1);
+            expect(consoleSpy).toHaveBeenCalledWith('[extractMediaRecursive] is_video => using direct video_url:', 'VideoTest');
+            expect(nodeFetch).toHaveBeenCalledWith('https://example.com/video.mp4');
+            
+            consoleSpy.mockRestore();
+        });
+
+        it('should handle video posts with no DASH manifest and no video_url (true silent failure)', async () => {
+            const { extractMediaRecursive } = require('./get');
+            
+            // Test video without DASH manifest AND without video_url - true silent failure
+            const videoWithoutAnyUrl = {
+                owner: { username: "testuser" },
+                is_video: true,
+                // Missing dash_info, video_dash_manifest, AND video_url
+                display_resources: []
+            };
+            
+            const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+            
+            const count = await extractMediaRecursive(videoWithoutAnyUrl, '/test/output', 'VideoTest');
+            
+            // Should return 0 because no download method is available
+            expect(count).toBe(0);
+            expect(consoleSpy).toHaveBeenCalledWith('[extractMediaRecursive] is_video => but no dash_info or video_url available.');
+            
+            consoleSpy.mockRestore();
+        });
     });
 });

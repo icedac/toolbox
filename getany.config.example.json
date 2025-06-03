@@ -1,0 +1,16 @@
+{
+  "outputDir": "downloads",
+  "quality": "high",
+  "sizeThreshold": "50k",
+  "timeout": 30,
+  "verbose": false,
+  "instagram": {
+    "quality": "high",
+    "sessionFile": ".instagram_session.json",
+    "cookiesFile": "cookies.txt"
+  },
+  "youtube": {
+    "format": "mp4",
+    "quality": "best"
+  }
+}
