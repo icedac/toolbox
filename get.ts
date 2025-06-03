@@ -9,12 +9,29 @@ import * as xml2js from 'xml2js';
 import nodeFetch from 'node-fetch';
 import * as dotenv from 'dotenv';
 import { createInstagramDownloader } from './instagram-downloader';
+import { getConfigLoader, Config } from './config';
 
 // Load environment variables
 try {
     dotenv.config();
 } catch (e) {
     // dotenv not installed, continue without it
+}
+
+// Load configuration
+let config: Config;
+try {
+    config = getConfigLoader().getConfig();
+} catch (error: any) {
+    console.error('Error loading configuration:', error.message);
+    // Continue with defaults if config loading fails
+    config = {
+        outputDir: 'output',
+        quality: 'high',
+        sizeThreshold: '10k',
+        timeout: 10,
+        verbose: false
+    };
 }
 
 /* --------------------- Types --------------------- */
@@ -133,7 +150,7 @@ interface DashMPD {
 }
 
 /* --------------------- Globals --------------------- */
-let isVerbose = false;
+let isVerbose = config.verbose || false;
 
 /* --------------------- Helpers --------------------- */
 function logDebug(...msg: any[]): void {
@@ -141,17 +158,29 @@ function logDebug(...msg: any[]): void {
 }
 
 export function parseSizeThreshold(input?: string): number {
-    if (!input) return 10240;
+    // Use config default if no input provided
+    const defaultValue = config.sizeThreshold || '10k';
+    if (!input) input = defaultValue;
+    
     const match = input.match(/^(\d+)(k?)$/i);
-    if (!match) return 10240;
+    if (!match) {
+        // Parse the default from config
+        const defaultMatch = defaultValue.match(/^(\d+)(k?)$/i);
+        if (!defaultMatch) return 10240;
+        const n = parseInt(defaultMatch[1], 10);
+        return defaultMatch[2].toLowerCase() === 'k' ? n * 1024 : n;
+    }
     const n = parseInt(match[1], 10);
     return match[2].toLowerCase() === 'k' ? n * 1024 : n;
 }
 
 export function parseTimeout(input?: string): number {
-    if (!input) return 10000; // 기본값 10초로 증가
+    // Use config default if no input provided
+    const defaultTimeout = config.timeout || 10;
+    if (!input) return defaultTimeout * 1000;
+    
     const timeout = parseInt(input, 10);
-    return isNaN(timeout) ? 10000 : timeout * 1000; // 초를 밀리초로 변환
+    return isNaN(timeout) ? defaultTimeout * 1000 : timeout * 1000; // 초를 밀리초로 변환
 }
 
 export function parseOutputFolder(urlString: string): string {
@@ -771,9 +800,9 @@ export async function handleInstagram(url: string, mediaType: string, sizeArg: s
     try {
         // Create Instagram downloader with configuration
         const downloader = await createInstagramDownloader({
-            outputDir: 'output',
-            quality: 'high',
-            sessionFile: '.instagram_session.json'
+            outputDir: config.outputDir || 'output',
+            quality: config.instagram?.quality || config.quality || 'high',
+            sessionFile: config.instagram?.sessionFile || '.instagram_session.json'
         });
 
         // Download media from URL
@@ -887,6 +916,12 @@ async function main() {
         } else if (arg === '--timeout' && i + 1 < args.length) {
             parsedArgs.timeout = args[i + 1];
             i++; // skip next argument
+        } else if (arg === '--output' && i + 1 < args.length) {
+            parsedArgs.output = args[i + 1];
+            i++; // skip next argument
+        } else if (arg === '--quality' && i + 1 < args.length) {
+            parsedArgs.quality = args[i + 1];
+            i++; // skip next argument
         } else if (!arg.startsWith('--')) {
             positionalArgs.push(arg);
         }
@@ -894,6 +929,14 @@ async function main() {
     
     [urlArg, mediaArg, sizeArg] = positionalArgs;
     timeoutArg = parsedArgs.timeout;
+    
+    // Apply CLI overrides to config
+    if (parsedArgs.output) {
+        config.outputDir = parsedArgs.output;
+    }
+    if (parsedArgs.quality) {
+        config.quality = parsedArgs.quality as 'high' | 'medium' | 'low';
+    }
 
     if (!urlArg) {
         console.log('Usage: node get.js <URL> [mediaType] [size] [--timeout seconds] [--verbose]');
@@ -901,6 +944,12 @@ async function main() {
         console.log('Options:');
         console.log('  --timeout: Wait time for Instagram responses (default: 10 seconds)');
         console.log('  --verbose: Show detailed logs');
+        console.log('  --output: Output directory (default: output)');
+        console.log('  --quality: Quality setting (high/medium/low, default: high)');
+        console.log('');
+        console.log('Configuration:');
+        console.log('  Create getany.config.json in current or home directory');
+        console.log('  See documentation for configuration options');
         console.log('');
         console.log('Instagram Authentication (optional):');
         console.log('  Method 1 - Cookies File:');
