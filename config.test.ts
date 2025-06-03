@@ -1,5 +1,5 @@
 import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals';
-import { getConfigLoader, loadConfig, getConfig } from './config';
+import { getConfigLoader, loadConfig, getConfig, resetConfigLoader } from './config';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -15,7 +15,7 @@ describe('Configuration Loader', () => {
     beforeEach(() => {
         jest.clearAllMocks();
         // Reset the singleton
-        (global as any).configLoaderInstance = null;
+        resetConfigLoader();
         
         // Mock cosmiconfigSync to return our mock explorer
         const cosmiconfig = require('cosmiconfig');
