@@ -8,3 +8,7 @@ pnpm-lock.yaml
 dist/
 coverage/
 .claude/settings.local.json
+getany.config.json
+.getanyrc
+.getanyrc.json
+.instagram_session.json

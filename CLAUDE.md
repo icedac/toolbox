@@ -14,6 +14,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `npm run test:watch` - Run tests in watch mode  
 - `npm run test:coverage` - Generate test coverage report
 
+### Configuration
+- Create `getany.config.json` for custom defaults
+- See `docs/CONFIG.md` for configuration options
+- Example config in `getany.config.example.json`
+
 ## Project Architecture
 
 This is a multi-tool collection for web scraping and media extraction, primarily focused on Instagram content downloading.
