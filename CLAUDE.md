@@ -17,6 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Configuration
 - Create `getany.config.json` for custom defaults
 - See `docs/CONFIG.md` for configuration options
+- See `docs/INSTAGRAM.md` for Instagram-specific setup and troubleshooting
 - Example config in `getany.config.example.json`
 
 ## Project Architecture
@@ -36,6 +37,10 @@ This is a multi-tool collection for web scraping and media extraction, primarily
 - Handles DASH video manifests for high-quality video/audio extraction  
 - Extracts carousel posts (multiple media items)
 - Downloads highest resolution images from display_resources
+- **Enhanced fallback strategies** for handling missing owner data
+- **Retry mechanism** with exponential backoff for reliability
+- **Improved error messages** with actionable troubleshooting tips
+- **Multiple extraction strategies** to handle various API response formats
 
 #### Authentication Methods
 Instagram authentication uses cookies set via environment variables:
