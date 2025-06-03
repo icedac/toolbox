@@ -48,6 +48,53 @@ export class InstagramDownloader {
     }
 
     /**
+     * Retry helper with exponential backoff
+     */
+    private async retryWithBackoff<T>(
+        fn: () => Promise<T>,
+        options: {
+            maxRetries?: number;
+            initialDelay?: number;
+            maxDelay?: number;
+            backoffFactor?: number;
+            onRetry?: (error: Error, attempt: number) => void;
+        } = {}
+    ): Promise<T> {
+        const {
+            maxRetries = 3,
+            initialDelay = 1000,
+            maxDelay = 30000,
+            backoffFactor = 2,
+            onRetry
+        } = options;
+        
+        let lastError: Error;
+        
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+                return await fn();
+            } catch (error: any) {
+                lastError = error;
+                
+                if (attempt < maxRetries) {
+                    const delay = Math.min(
+                        initialDelay * Math.pow(backoffFactor, attempt),
+                        maxDelay
+                    );
+                    
+                    if (onRetry) {
+                        onRetry(error, attempt + 1);
+                    }
+                    
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        }
+        
+        throw lastError!;
+    }
+
+    /**
      * Initialize and authenticate with Instagram
      */
     async initialize(): Promise<boolean> {
@@ -257,13 +304,34 @@ export class InstagramDownloader {
      */
     private async getMediaInfo(url: string): Promise<MediaInfo | null> {
         try {
-            // Use web scraping approach similar to the original implementation
-            // This is more reliable for public posts and doesn't require authentication
-            const response = await nodeFetch(url + '?__a=1&__d=dis');
+            // Use retry logic for better reliability
+            const fetchWithRetry = async () => {
+                const response = await nodeFetch(url + '?__a=1&__d=dis');
+                
+                if (!response.ok) {
+                    if (response.status === 404) {
+                        throw new Error('Post not found - it may be private, deleted, or require authentication');
+                    } else if (response.status === 429) {
+                        throw new Error('Rate limited - please wait a few minutes before trying again');
+                    } else if (response.status === 401) {
+                        throw new Error('Authentication required - please provide Instagram cookies');
+                    } else {
+                        throw new Error(`Failed to fetch post data: ${response.status}`);
+                    }
+                }
+                
+                return response;
+            };
             
-            if (!response.ok) {
-                throw new Error(`Failed to fetch post data: ${response.status}`);
-            }
+            const response = await this.retryWithBackoff(fetchWithRetry, {
+                maxRetries: 3,
+                onRetry: (error, attempt) => {
+                    console.log(`⏳ Attempt ${attempt} failed: ${error.message}`);
+                    if (error.message.includes('429') || error.message.includes('Rate limited')) {
+                        console.log('💡 Waiting longer due to rate limiting...');
+                    }
+                }
+            });
 
             const data = await response.json() as any;
             const mediaData = data?.items?.[0] || data?.graphql?.shortcode_media;

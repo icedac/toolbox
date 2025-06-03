@@ -9,12 +9,29 @@ import * as xml2js from 'xml2js';
 import nodeFetch from 'node-fetch';
 import * as dotenv from 'dotenv';
 import { createInstagramDownloader } from './instagram-downloader';
+import { getConfigLoader, Config } from './config';
 
 // Load environment variables
 try {
     dotenv.config();
 } catch (e) {
     // dotenv not installed, continue without it
+}
+
+// Load configuration
+let config: Config;
+try {
+    config = getConfigLoader().getConfig();
+} catch (error: any) {
+    console.error('Error loading configuration:', error.message);
+    // Continue with defaults if config loading fails
+    config = {
+        outputDir: 'output',
+        quality: 'high',
+        sizeThreshold: '10k',
+        timeout: 10,
+        verbose: false
+    };
 }
 
 /* --------------------- Types --------------------- */
@@ -133,25 +150,85 @@ interface DashMPD {
 }
 
 /* --------------------- Globals --------------------- */
-let isVerbose = false;
+let isVerbose = config.verbose || false;
 
 /* --------------------- Helpers --------------------- */
 function logDebug(...msg: any[]): void {
     if (isVerbose) console.log(...msg);
 }
 
+interface RetryOptions {
+    maxRetries?: number;
+    initialDelay?: number;
+    maxDelay?: number;
+    backoffFactor?: number;
+    onRetry?: (error: Error, attempt: number) => void;
+}
+
+async function retryWithBackoff<T>(
+    fn: () => Promise<T>,
+    options: RetryOptions = {}
+): Promise<T> {
+    const {
+        maxRetries = 3,
+        initialDelay = 1000,
+        maxDelay = 30000,
+        backoffFactor = 2,
+        onRetry
+    } = options;
+    
+    let lastError: Error;
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            return await fn();
+        } catch (error: any) {
+            lastError = error;
+            
+            if (attempt < maxRetries) {
+                const delay = Math.min(
+                    initialDelay * Math.pow(backoffFactor, attempt),
+                    maxDelay
+                );
+                
+                if (onRetry) {
+                    onRetry(error, attempt + 1);
+                } else {
+                    console.log(`⏳ Attempt ${attempt + 1} failed, retrying in ${delay / 1000}s...`);
+                }
+                
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+    }
+    
+    throw lastError!;
+}
+
 export function parseSizeThreshold(input?: string): number {
-    if (!input) return 10240;
+    // Use config default if no input provided
+    const defaultValue = config.sizeThreshold || '10k';
+    if (!input) input = defaultValue;
+    
     const match = input.match(/^(\d+)(k?)$/i);
-    if (!match) return 10240;
+    if (!match) {
+        // Parse the default from config
+        const defaultMatch = defaultValue.match(/^(\d+)(k?)$/i);
+        if (!defaultMatch) return 10240;
+        const n = parseInt(defaultMatch[1], 10);
+        return defaultMatch[2].toLowerCase() === 'k' ? n * 1024 : n;
+    }
     const n = parseInt(match[1], 10);
     return match[2].toLowerCase() === 'k' ? n * 1024 : n;
 }
 
 export function parseTimeout(input?: string): number {
-    if (!input) return 10000; // 기본값 10초로 증가
+    // Use config default if no input provided
+    const defaultTimeout = config.timeout || 10;
+    if (!input) return defaultTimeout * 1000;
+    
     const timeout = parseInt(input, 10);
-    return isNaN(timeout) ? 10000 : timeout * 1000; // 초를 밀리초로 변환
+    return isNaN(timeout) ? defaultTimeout * 1000 : timeout * 1000; // 초를 밀리초로 변환
 }
 
 export function parseOutputFolder(urlString: string): string {
@@ -276,7 +353,7 @@ function mergeVideoAndAudio(folderName: string, postName: string, ffmpegPath: st
 }
 
 /* --------------------- JSON Parsing --------------------- */
-function findJsonItemWithOwner(jsonStr: string): InstagramMediaItem | null {
+export function findJsonItemWithOwner(jsonStr: string): InstagramMediaItem | null {
     try {
         const obj = JSON.parse(jsonStr);
         return searchItemWithOwner(obj);
@@ -295,8 +372,7 @@ function searchItemWithOwner(obj: any): InstagramMediaItem | null {
     return null;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function findAnyMediaData(jsonStr: string): InstagramMediaItem | null {
+export function findAnyMediaData(jsonStr: string): InstagramMediaItem | null {
     try {
         const obj = JSON.parse(jsonStr);
         return searchAnyMediaData(obj);
@@ -350,6 +426,158 @@ function searchAnyMediaData(obj: any): InstagramMediaItem | null {
     }
     
     return null;
+}
+
+export function findMediaInGraphQLResponse(jsonStr: string): InstagramMediaItem | null {
+    try {
+        const obj = JSON.parse(jsonStr);
+        
+        // Common GraphQL response paths
+        const paths = [
+            'data.xdt_shortcode_media',
+            'data.shortcode_media',
+            'graphql.shortcode_media',
+            'data.xdt_api__v1__media__shortcode__web_info.items[0]',
+            'items[0]'
+        ];
+        
+        for (const path of paths) {
+            const media = getNestedValue(obj, path);
+            if (media && (media.display_resources || media.video_url || media.dash_info)) {
+                return normalizeMediaItem(media);
+            }
+        }
+        
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+export function findMediaInAPIResponse(jsonStr: string): InstagramMediaItem | null {
+    try {
+        const obj = JSON.parse(jsonStr);
+        
+        // Check if it's a direct API response
+        if (obj.items && Array.isArray(obj.items) && obj.items.length > 0) {
+            const item = obj.items[0];
+            if (item.image_versions2 || item.video_versions) {
+                // Convert API format to our format
+                const mediaObj: InstagramMediaItem = {
+                    id: item.id || item.pk,
+                    shortcode: item.code,
+                    is_video: item.media_type === 2, // 1 = photo, 2 = video, 8 = carousel
+                    owner: {
+                        username: item.user?.username || 'unknown'
+                    }
+                };
+                
+                // Convert image_versions2 to display_resources
+                if (item.image_versions2?.candidates) {
+                    mediaObj.display_resources = item.image_versions2.candidates.map((img: any) => ({
+                        src: img.url,
+                        config_width: img.width,
+                        config_height: img.height
+                    }));
+                }
+                
+                // Handle video
+                if (item.video_versions && item.video_versions.length > 0) {
+                    mediaObj.video_url = item.video_versions[0].url;
+                    mediaObj.is_video = true;
+                }
+                
+                // Handle carousel
+                if (item.carousel_media && Array.isArray(item.carousel_media)) {
+                    mediaObj.edge_sidecar_to_children = {
+                        edges: item.carousel_media.map((child: any) => ({
+                            node: {
+                                id: child.id,
+                                is_video: child.media_type === 2,
+                                display_resources: child.image_versions2?.candidates?.map((img: any) => ({
+                                    src: img.url,
+                                    config_width: img.width,
+                                    config_height: img.height
+                                })),
+                                video_url: child.video_versions?.[0]?.url
+                            }
+                        }))
+                    };
+                }
+                
+                return mediaObj;
+            }
+        }
+        
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+function getNestedValue(obj: any, path: string): any {
+    const parts = path.split('.');
+    let current = obj;
+    
+    for (const part of parts) {
+        // Handle array notation like items[0]
+        const arrayMatch = part.match(/^(\w+)\[(\d+)\]$/);
+        if (arrayMatch) {
+            const [, key, index] = arrayMatch;
+            if (!current[key] || !Array.isArray(current[key])) return null;
+            current = current[key][parseInt(index)];
+        } else {
+            if (!current || typeof current !== 'object' || !(part in current)) return null;
+            current = current[part];
+        }
+    }
+    
+    return current;
+}
+
+function normalizeMediaItem(data: any): InstagramMediaItem {
+    const item: InstagramMediaItem = {
+        id: data.id || data.pk || 'unknown',
+        shortcode: data.shortcode || data.code || 'unknown',
+        is_video: data.is_video || data.__typename === 'GraphVideo' || !!data.video_url,
+        display_resources: data.display_resources,
+        video_url: data.video_url,
+        dash_info: data.dash_info,
+        owner: data.owner || { username: 'unknown' }
+    };
+    
+    // Handle different carousel formats
+    if (data.edge_sidecar_to_children) {
+        item.edge_sidecar_to_children = data.edge_sidecar_to_children;
+    } else if (data.carousel_media) {
+        item.edge_sidecar_to_children = {
+            edges: data.carousel_media.map((child: any) => ({ node: child }))
+        };
+    }
+    
+    return item;
+}
+
+export function extractUsernameFromUrl(url: string): string | null {
+    try {
+        // Match Instagram URL patterns
+        const patterns = [
+            /instagram\.com\/p\/[^\/]+\/?\?taken-by=([^&]+)/i,  // Old format with taken-by
+            /instagram\.com\/([^\/]+)\/p\//i,                   // Username before /p/
+            /instagram\.com\/stories\/([^\/]+)\//i              // Stories URL
+        ];
+        
+        for (const pattern of patterns) {
+            const match = url.match(pattern);
+            if (match && match[1]) {
+                return match[1];
+            }
+        }
+        
+        return null;
+    } catch {
+        return null;
+    }
 }
 
 /* --------------------- DASH Downloads --------------------- */
@@ -434,7 +662,7 @@ async function mergeDashVideoAudio(videoBuf: Buffer, audioBuf: Buffer, outPath: 
     }
 }
 
-async function downloadBestQualityDash(mpdXml: string, folderName: string, postName: string): Promise<void> {
+export async function downloadBestQualityDash(mpdXml: string, folderName: string, postName: string): Promise<void> {
     logDebug('[downloadBestQualityDash] Parsing MPD XML');
     const parsed: DashMPD = await xml2js.parseStringPromise(mpdXml);
     const period = parsed.MPD.Period[0];
@@ -505,7 +733,7 @@ function findAudioAdaptationSet(adaptationSets: DashAdaptationSet[]): DashAdapta
 }
 
 /* --------------------- Highest Resolution Image --------------------- */
-async function downloadHighestResImage(displayResources: InstagramDisplayResource[], folderName: string, fileName: string): Promise<void> {
+export async function downloadHighestResImage(displayResources: InstagramDisplayResource[], folderName: string, fileName: string): Promise<void> {
     const best = displayResources.reduce((acc, cur) => (cur.config_width > acc.config_width ? cur : acc));
     const url = best.src;
     logDebug('[downloadHighestResImage] =>', url);
@@ -733,7 +961,7 @@ async function authenticateWithCookies(page: Page): Promise<boolean> {
 }
 
 /* --------------------- Recursive Media Extraction --------------------- */
-async function extractMediaRecursive(item: InstagramMediaItem, folderName: string, postName: string): Promise<number> {
+export async function extractMediaRecursive(item: InstagramMediaItem, folderName: string, postName: string): Promise<number> {
     let downloadCount = 0;
 
     if (item.edge_sidecar_to_children && item.edge_sidecar_to_children.edges) {
@@ -751,8 +979,22 @@ async function extractMediaRecursive(item: InstagramMediaItem, folderName: strin
             console.log('[extractMediaRecursive] is_video => using MPD:', postName);
             await downloadBestQualityDash(item.dash_info.video_dash_manifest, folderName, postName);
             downloadCount++;
+        } else if (item.video_url) {
+            console.log('[extractMediaRecursive] is_video => using direct video_url:', postName);
+            try {
+                const fileName = postName + '.mp4';
+                const filePath = path.join(folderName, fileName);
+                const resp = await nodeFetch(item.video_url);
+                const buffer = await resp.buffer();
+                fs.mkdirSync(folderName, { recursive: true });
+                fs.writeFileSync(filePath, buffer);
+                console.log(`Saved file => ${fileName} ${buffer.length} bytes`);
+                downloadCount++;
+            } catch (error) {
+                console.log(`⚠️  Failed to download video from direct URL: ${error}`);
+            }
         } else {
-            console.log('[extractMediaRecursive] is_video => but no dash_info.');
+            console.log('[extractMediaRecursive] is_video => but no dash_info or video_url available.');
         }
     }
     if (Array.isArray(item.display_resources) && item.display_resources.length > 0) {
@@ -771,13 +1013,23 @@ export async function handleInstagram(url: string, mediaType: string, sizeArg: s
     try {
         // Create Instagram downloader with configuration
         const downloader = await createInstagramDownloader({
-            outputDir: 'output',
-            quality: 'high',
-            sessionFile: '.instagram_session.json'
+            outputDir: config.outputDir || 'output',
+            quality: config.instagram?.quality || config.quality || 'high',
+            sessionFile: config.instagram?.sessionFile || '.instagram_session.json'
         });
 
-        // Download media from URL
-        const result = await downloader.downloadFromUrl(url);
+        // Download media from URL with retry logic
+        const result = await retryWithBackoff(
+            () => downloader.downloadFromUrl(url),
+            {
+                maxRetries: 2,
+                initialDelay: 2000,
+                onRetry: (error, attempt) => {
+                    console.log(`⏳ Download attempt ${attempt} failed, retrying...`);
+                    logDebug(`[Retry] Error:`, error.message);
+                }
+            }
+        );
         
         if (result.success) {
             console.log(`✅ Successfully downloaded ${result.files.length} files`);
@@ -786,6 +1038,15 @@ export async function handleInstagram(url: string, mediaType: string, sizeArg: s
             });
         } else {
             console.log(`❌ Download failed: ${result.error}`);
+            
+            // Provide helpful error-specific guidance
+            if (result.error?.includes('404') || result.error?.includes('not found')) {
+                console.log('💡 The post may be private or deleted');
+            } else if (result.error?.includes('429') || result.error?.includes('rate limit')) {
+                console.log('💡 Instagram is rate limiting requests - wait a few minutes');
+            } else if (result.error?.includes('401') || result.error?.includes('authentication')) {
+                console.log('💡 Authentication required - set INSTAGRAM_COOKIES_FILE environment variable');
+            }
             
             // Fallback to legacy Puppeteer method if API fails
             console.log('🔄 Falling back to legacy browser method...');
@@ -823,22 +1084,66 @@ async function handleInstagramLegacy(url: string, mediaType: string, sizeArg: st
         await page.setRequestInterception(true);
         page.on('request', (req: HTTPRequest) => req.continue());
 
+        let jsonResponseCount = 0;
+        let mediaDataFound = false;
+        
         page.on('response', async (res: HTTPResponse) => {
             try {
                 if (!res.ok()) return;
                 const ctype = (res.headers()['content-type'] || '').toLowerCase();
-                if (ctype.includes('application/json') && res.url().endsWith('instagram.com/graphql/query')) {
-                    const buf = await res.buffer();
-                    const item = findJsonItemWithOwner(buf.toString());
-                    if (!item) return;
-                    items.push(item);
+                if (ctype.includes('application/json')) {
+                    jsonResponseCount++;
+                    
+                    if (res.url().includes('instagram.com')) {
+                        const buf = await res.buffer();
+                        const jsonStr = buf.toString();
+                        logDebug(`[JSON Response] URL: ${res.url().substring(0, 100)}...`);
+                        logDebug(`[JSON Response] Size: ${jsonStr.length} chars`);
+                        
+                        // Try multiple extraction strategies
+                        let item = findJsonItemWithOwner(jsonStr);
+                        
+                        if (!item) {
+                            logDebug('[JSON Response] No owner info found, trying alternative strategies');
+                            
+                            // Strategy 1: Try to find any media data
+                            item = findAnyMediaData(jsonStr);
+                            
+                            // Strategy 2: Try to extract from different GraphQL structures
+                            if (!item) {
+                                item = findMediaInGraphQLResponse(jsonStr);
+                            }
+                            
+                            // Strategy 3: Try to extract from API response format
+                            if (!item) {
+                                item = findMediaInAPIResponse(jsonStr);
+                            }
+                            
+                            if (item) {
+                                logDebug('[JSON Response] Found media data using fallback strategy');
+                                // Extract username from URL if not present
+                                if (!item.owner || !item.owner.username) {
+                                    const usernameFromUrl = extractUsernameFromUrl(url);
+                                    item.owner = { username: usernameFromUrl || 'instagram_post' };
+                                    logDebug(`[JSON Response] Using username from URL: ${item.owner.username}`);
+                                }
+                            }
+                        }
+                        
+                        if (item) {
+                            mediaDataFound = true;
+                            items.push(item);
 
-                    const user = item.owner;
-                    if (user && user.username) {
-                        console.log('Found username =>', user.username);
-                        folderName = path.join('output', user.username);
-                        fs.mkdirSync(folderName, { recursive: true });
-                        fs.writeFileSync(path.join(folderName, postName + '.json'), JSON.stringify(item));
+                            const user = item.owner;
+                            if (user && user.username) {
+                                console.log('Found username =>', user.username);
+                                folderName = path.join('output', user.username);
+                                fs.mkdirSync(folderName, { recursive: true });
+                                fs.writeFileSync(path.join(folderName, postName + '.json'), JSON.stringify(item));
+                            }
+                        } else {
+                            logDebug('[JSON Response] No usable media data found in this response');
+                        }
                     }
                 }
             } catch (e) {
@@ -852,10 +1157,36 @@ async function handleInstagramLegacy(url: string, mediaType: string, sizeArg: st
 
         resources.forEach(r => filterAndSaveMedia(folderName, r, threshold));
 
+        logDebug(`[handleInstagramLegacy] Found ${items.length} items with owner info`);
+        logDebug(`[handleInstagramLegacy] Total JSON responses: ${jsonResponseCount}`);
+        logDebug(`[handleInstagramLegacy] Media data found: ${mediaDataFound}`);
+        
+        if (items.length === 0) {
+            if (jsonResponseCount > 0 && !mediaDataFound) {
+                console.log('⚠️  Instagram returned data but in an unexpected format');
+                console.log('   This could indicate Instagram has changed their API structure');
+            }
+            console.log('⚠️  No media items found with owner information');
+            console.log('');
+            console.log('💡 Troubleshooting tips:');
+            console.log('   1. Try again in a few minutes (rate limiting may apply)');
+            console.log('   2. Use authentication for better reliability:');
+            console.log('      - Set INSTAGRAM_COOKIES_FILE environment variable');
+            console.log('      - Or use INSTAGRAM_COOKIES_JSON with cookie data');
+            console.log('   3. Check if the post is public and accessible');
+            console.log('   4. Instagram may have changed their API structure');
+            console.log('');
+            console.log('📝 For authenticated access, export cookies from your browser:');
+            console.log('   - Use a browser extension to export cookies.txt');
+            console.log('   - Set: export INSTAGRAM_COOKIES_FILE="/path/to/cookies.txt"');
+            return;
+        }
+
         for (let i = 0; i < items.length; i++) {
             const item = items[i];
             const localName = postName + (i > 0 ? `_${i}` : '');
-            await extractMediaRecursive(item, folderName, localName);
+            const downloadCount = await extractMediaRecursive(item, folderName, localName);
+            logDebug(`[handleInstagramLegacy] Downloaded ${downloadCount} files from item ${i + 1}`);
         }
     } catch (error) {
         console.error('Error in handleInstagramLegacy:', error);
@@ -887,6 +1218,12 @@ async function main() {
         } else if (arg === '--timeout' && i + 1 < args.length) {
             parsedArgs.timeout = args[i + 1];
             i++; // skip next argument
+        } else if (arg === '--output' && i + 1 < args.length) {
+            parsedArgs.output = args[i + 1];
+            i++; // skip next argument
+        } else if (arg === '--quality' && i + 1 < args.length) {
+            parsedArgs.quality = args[i + 1];
+            i++; // skip next argument
         } else if (!arg.startsWith('--')) {
             positionalArgs.push(arg);
         }
@@ -894,6 +1231,14 @@ async function main() {
     
     [urlArg, mediaArg, sizeArg] = positionalArgs;
     timeoutArg = parsedArgs.timeout;
+    
+    // Apply CLI overrides to config
+    if (parsedArgs.output) {
+        config.outputDir = parsedArgs.output;
+    }
+    if (parsedArgs.quality) {
+        config.quality = parsedArgs.quality as 'high' | 'medium' | 'low';
+    }
 
     if (!urlArg) {
         console.log('Usage: node get.js <URL> [mediaType] [size] [--timeout seconds] [--verbose]');
@@ -901,6 +1246,12 @@ async function main() {
         console.log('Options:');
         console.log('  --timeout: Wait time for Instagram responses (default: 10 seconds)');
         console.log('  --verbose: Show detailed logs');
+        console.log('  --output: Output directory (default: output)');
+        console.log('  --quality: Quality setting (high/medium/low, default: high)');
+        console.log('');
+        console.log('Configuration:');
+        console.log('  Create getany.config.json in current or home directory');
+        console.log('  See documentation for configuration options');
         console.log('');
         console.log('Instagram Authentication (optional):');
         console.log('  Method 1 - Cookies File:');

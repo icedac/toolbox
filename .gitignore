@@ -3,8 +3,11 @@
 output/
 downloads/
 .env
-pnpm-lock.yaml
 .insta_cookie.json
 dist/
 coverage/
 .claude/settings.local.json
+getany.config.json
+.getanyrc
+.getanyrc.json
+.instagram_session.json
